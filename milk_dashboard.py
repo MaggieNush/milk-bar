@@ -39,7 +39,7 @@ def get_product_options(d):
 
 # Dashboard Page
 if page == "Dashboard":
-    st.title("🥛 Mama's Milk Bar Dashboard")
+    st.title("Mama's Milk Bar Dashboard")
     
     # Calculate metrics
     total_sales = sum(sale.get("total_amount", 0) for sale in data.get("sales", []))
@@ -98,7 +98,7 @@ if page == "Dashboard":
 
 # Sales Page
 elif page == "Sales":
-    st.title("📊 Sales Overview & Record Sale")
+    st.title("Sales Overview & Record Sale")
 
     # Record New Sale
     st.subheader("Record New Sale")
@@ -195,7 +195,7 @@ elif page == "Sales":
 
 # Clients Page
 elif page == "Clients":
-    st.title("👥 Clients")
+    st.title("Clients")
     data = load()
     # Add new client form
     with st.expander("➕ Add New Client"):
@@ -233,7 +233,7 @@ elif page == "Clients":
 
 # Suppliers Page
 elif page == "Suppliers":
-    st.title("🏭 Suppliers & Deliveries")
+    st.title("Suppliers & Deliveries")
     data = load()
     # Add new supplier form
     with st.expander("➕ Add New Supplier"):
@@ -251,7 +251,7 @@ elif page == "Suppliers":
                 save(data)
                 st.success(f"Supplier '{name}' added successfully!")
     # Record delivery
-    with st.expander("🚚 Record Delivery"):
+    with st.expander("Record Delivery"):
         if not data.get("suppliers") or not data.get("products"):
             st.info("Add suppliers and products first.")
         else:
@@ -303,7 +303,7 @@ elif page == "Suppliers":
 
 # Products Page
 elif page == "Products":
-    st.title("🧺 Products & Inventory")
+    st.title("Products & Inventory")
     data = load()
     if not data.get("products"):
         st.info("No products found in inventory.")
