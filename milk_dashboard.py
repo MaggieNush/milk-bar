@@ -301,6 +301,58 @@ elif page == "Suppliers":
     else:
         st.info("No suppliers found. Add your first supplier using the form above.")
 
+# Products Page
+elif page == "Products":
+    st.title("🧺 Products & Inventory")
+    data = load()
+    if not data.get("products"):
+        st.info("No products found in inventory.")
+        if st.button("Seed sample products"):
+            now = datetime.now().strftime("%Y-%m-%d %H:%M")
+            data["products"] = [
+                {"id": 1, "name": "Fresh Milk", "price": 60.0, "unit": "liter", "stock": 50.0, "date_added": now},
+                {"id": 2, "name": "Mala", "price": 50.0, "unit": "packet", "stock": 30.0, "date_added": now},
+                {"id": 3, "name": "Yogurt", "price": 80.0, "unit": "bottle", "stock": 20.0, "date_added": now},
+            ]
+            save(data)
+            st.success("Sample products added.")
+            st.rerun()
+    with st.expander("➕ Add New Product"):
+        with st.form("add_product"):
+            name = st.text_input("Product Name")
+            price = st.number_input("Price per unit (Ksh)", min_value=0.0, step=1.0)
+            unit = st.text_input("Unit (e.g., liter, packet, bottle)")
+            stock = st.number_input("Initial stock", min_value=0.0, step=0.5)
+            if st.form_submit_button("Add Product"):
+                next_id = max([p.get("id", 0) for p in data.get("products", [])], default=0) + 1
+                new_product = {
+                    "id": next_id,
+                    "name": name,
+                    "price": price,
+                    "unit": unit,
+                    "stock": stock,
+                    "date_added": datetime.now().strftime("%Y-%m-%d %H:%M")
+                }
+                data.setdefault("products", []).append(new_product)
+                save(data)
+                st.success(f"Product '{name}' added successfully!")
+                st.rerun()
+    st.subheader("Inventory")
+    data = load()
+    if data.get("products"):
+        inv_rows = []
+        for p in data["products"]:
+            inv_rows.append({
+                "ID": p["id"],
+                "Name": p["name"],
+                "Price": format_currency(p["price"]),
+                "Stock": p["stock"],
+                "Unit": p["unit"]
+            })
+        st.dataframe(pd.DataFrame(inv_rows), use_container_width=True)
+    else:
+        st.info("No products found. Add a product above.")
+
 # Add some styling
 st.markdown("""
     <style>
