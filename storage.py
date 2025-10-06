@@ -149,6 +149,81 @@ def create_supplier(db: Session, name: str, phone: Optional[str] = None) -> Supp
     return s
 
 
+def delete_supplier(db: Session, supplier_id: int) -> None:
+    """Delete supplier only if no deliveries reference it."""
+    has_deliveries = db.query(Delivery).filter(Delivery.supplier_id == supplier_id).first() is not None
+    if has_deliveries:
+        raise ValueError("Cannot delete supplier with existing deliveries. Delete deliveries first.")
+    s = db.query(Supplier).filter(Supplier.id == supplier_id).one()
+    db.delete(s)
+    db.commit()
+
+
+def delete_delivery(db: Session, delivery_id: int) -> None:
+    """Delete a delivery and reduce product stock accordingly."""
+    d = db.query(Delivery).filter(Delivery.id == delivery_id).one()
+    prod = db.query(Product).filter(Product.id == d.product_id).one()
+    # decrease stock added by this delivery
+    new_stock = (prod.stock or 0) - d.quantity
+    if new_stock < 0:
+        new_stock = 0
+    prod.stock = new_stock
+    db.delete(d)
+    db.commit()
+
+
+def delete_sale_item(db: Session, sale_item_id: int) -> None:
+    """Delete a sale item, restore product stock, and update sale total or delete sale if empty."""
+    it = db.query(SaleItem).filter(SaleItem.id == sale_item_id).one()
+    sale = db.query(Sale).filter(Sale.id == it.sale_id).one()
+    prod = db.query(Product).filter(Product.id == it.product_id).one()
+    # restore stock reduced by this sale item
+    prod.stock = (prod.stock or 0) + it.quantity
+    # adjust sale total
+    sale.total_amount = float(sale.total_amount or 0) - float(it.total or (it.quantity * it.price_per_unit))
+    if sale.total_amount < 0:
+        sale.total_amount = 0.0
+    db.delete(it)
+    db.flush()
+    # if sale has no more items, delete sale
+    remaining = db.query(SaleItem).filter(SaleItem.sale_id == sale.id).first()
+    if remaining is None:
+        db.delete(sale)
+    db.commit()
+
+
+def delete_client(db: Session, client_id: int) -> None:
+    """Delete client only if no sales reference it."""
+    has_sales = db.query(Sale).filter(Sale.client_id == client_id).first() is not None
+    if has_sales:
+        raise ValueError("Cannot delete client with existing sales. Delete sales for this client first.")
+    c = db.query(Client).filter(Client.id == client_id).one()
+    db.delete(c)
+    db.commit()
+
+
+def delete_product(db: Session, product_id: int) -> None:
+    """Delete product only if not referenced by deliveries or sale items."""
+    has_deliveries = db.query(Delivery).filter(Delivery.product_id == product_id).first() is not None
+    has_sale_items = db.query(SaleItem).filter(SaleItem.product_id == product_id).first() is not None
+    if has_deliveries or has_sale_items:
+        raise ValueError("Cannot delete product that has deliveries or sales. Remove related records first.")
+    p = db.query(Product).filter(Product.id == product_id).one()
+    db.delete(p)
+    db.commit()
+
+
+def delete_sale(db: Session, sale_id: int) -> None:
+    """Delete a sale and its items, restoring product stock quantities."""
+    s = db.query(Sale).filter(Sale.id == sale_id).one()
+    # restore stock
+    for it in s.items:
+        prod = db.query(Product).filter(Product.id == it.product_id).one()
+        prod.stock = (prod.stock or 0) + it.quantity
+    db.delete(s)
+    db.commit()
+
+
 def record_delivery(db: Session, supplier_id: int, product_id: int, quantity: float, price_per_unit: float) -> Delivery:
     total_cost = quantity * price_per_unit
     d = Delivery(
@@ -250,6 +325,7 @@ def snapshot(db: Session) -> Dict:
                 "client_id": s.client_id,
                 "items": [
                     {
+                        "id": it.id,
                         "product_id": it.product_id,
                         "quantity": it.quantity,
                         "price_per_unit": it.price_per_unit,
@@ -268,3 +344,68 @@ def snapshot(db: Session) -> Dict:
         "deliveries": deliveries,
         "sales": sales,
     }
+
+
+# Admin utilities
+def reset_all(db: Session) -> None:
+    """Dangerous: clear all tables and restart identities.
+    Uses TRUNCATE on Postgres; falls back to manual deletes on SQLite.
+    """
+    try:
+        # Works on Postgres
+        db.execute(
+            "TRUNCATE TABLE sale_items, sales, deliveries, products, clients, suppliers RESTART IDENTITY CASCADE;"
+        )
+        db.commit()
+        return
+    except Exception:
+        # Fallback for SQLite or other engines: manual delete respecting FKs
+        db.execute("DELETE FROM sale_items;")
+        db.execute("DELETE FROM sales;")
+        db.execute("DELETE FROM deliveries;")
+        db.execute("DELETE FROM products;")
+        db.execute("DELETE FROM clients;")
+        db.execute("DELETE FROM suppliers;")
+        try:
+            # Reset SQLite AUTOINCREMENT where supported
+            db.execute("DELETE FROM sqlite_sequence WHERE name IN ('sale_items','sales','deliveries','products','clients','suppliers');")
+        except Exception:
+            pass
+        db.commit()
+
+
+def update_product(db: Session, product_id: int, name: Optional[str] = None, price: Optional[float] = None, unit: Optional[str] = None, stock: Optional[float] = None) -> Product:
+    p = db.query(Product).filter(Product.id == product_id).one()
+    if name is not None:
+        p.name = name
+    if price is not None:
+        p.price = price
+    if unit is not None:
+        p.unit = unit
+    if stock is not None:
+        p.stock = stock
+    db.commit()
+    db.refresh(p)
+    return p
+
+
+def update_client(db: Session, client_id: int, name: Optional[str] = None, phone: Optional[str] = None) -> Client:
+    c = db.query(Client).filter(Client.id == client_id).one()
+    if name is not None:
+        c.name = name
+    if phone is not None:
+        c.phone = phone
+    db.commit()
+    db.refresh(c)
+    return c
+
+
+def update_supplier(db: Session, supplier_id: int, name: Optional[str] = None, phone: Optional[str] = None) -> Supplier:
+    s = db.query(Supplier).filter(Supplier.id == supplier_id).one()
+    if name is not None:
+        s.name = name
+    if phone is not None:
+        s.phone = phone
+    db.commit()
+    db.refresh(s)
+    return s

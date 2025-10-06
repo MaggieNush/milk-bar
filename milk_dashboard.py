@@ -22,7 +22,8 @@ from storage import (
     get_session,
     list_products, list_clients, list_suppliers, list_deliveries, list_sales,
     create_product, create_client, create_supplier, record_delivery, record_sale,
-    snapshot, init_db,
+    snapshot, init_db, update_product, update_client, update_supplier,
+    delete_sale, delete_supplier, delete_product, delete_client, delete_delivery, delete_sale_item,
 )
 
 # Set page config
@@ -58,7 +59,7 @@ data = load()
 
 # Sidebar for navigation
 st.sidebar.title("Navigation")
-page = st.sidebar.radio("Go to", ["Dashboard", "Sales", "Clients", "Suppliers", "Products"])
+page = st.sidebar.radio("Go to", ["Dashboard", "Sales", "Clients", "Suppliers", "Products", "Admin"])
 
 # Helper functions
 def format_currency(amount):
@@ -369,9 +370,229 @@ elif page == "Products":
                 "Stock": p["stock"],
                 "Unit": p["unit"]
             })
-        st.dataframe(pd.DataFrame(inv_rows), use_container_width=True)
+        st.dataframe(pd.DataFrame(inv_rows))
     else:
-        st.info("No products found. Add a product above.")
+        st.info("No products found. Add your first product using the form above.")
+
+# Admin Page
+elif page == "Admin":
+    st.title(" Admin")
+    st.caption("View data, make quick edits, export CSVs, and reset all data (dangerous).")
+
+    # Counts
+    with get_session() as db:
+        counts = {
+            "Products": len(list_products(db)),
+            "Clients": len(list_clients(db)),
+            "Suppliers": len(list_suppliers(db)),
+            "Deliveries": len(list_deliveries(db)),
+            "Sales": len(list_sales(db)),
+        }
+    cols = st.columns(len(counts))
+    for (label, value), col in zip(counts.items(), cols):
+        with col:
+            st.metric(label, value)
+
+    st.subheader("Browse Tables")
+    data = load()
+    tab1, tab2, tab3, tab4, tab5 = st.tabs(["Products", "Clients", "Suppliers", "Deliveries", "Sales"])
+    with tab1:
+        st.dataframe(pd.DataFrame(data.get("products", [])))
+    with tab2:
+        st.dataframe(pd.DataFrame(data.get("clients", [])))
+    with tab3:
+        st.dataframe(pd.DataFrame(data.get("suppliers", [])))
+    with tab4:
+        st.dataframe(pd.DataFrame(data.get("deliveries", [])))
+    with tab5:
+        st.write("Sales are nested (items inside each sale). Export CSVs to see line items.")
+        st.dataframe(pd.DataFrame(data.get("sales", [])))
+
+    st.subheader("Quick Edits")
+    edit_tab1, edit_tab2, edit_tab3 = st.tabs(["Edit Product", "Edit Client", "Edit Supplier"])
+    with edit_tab1:
+        if data.get("products"):
+            prod_map = {f"{p['id']}: {p['name']}": p['id'] for p in data["products"]}
+            sel = st.selectbox("Select product", list(prod_map.keys()))
+            pid = prod_map[sel]
+            name = st.text_input("Name", value=next(p['name'] for p in data['products'] if p['id']==pid))
+            price = st.number_input("Price", min_value=0.0, step=1.0, value=float(next(p['price'] for p in data['products'] if p['id']==pid)))
+            unit = st.text_input("Unit", value=next(p['unit'] for p in data['products'] if p['id']==pid))
+            stock = st.number_input("Stock", min_value=0.0, step=0.5, value=float(next(p['stock'] for p in data['products'] if p['id']==pid)))
+            if st.button("Save Product Changes"):
+                try:
+                    with get_session() as db:
+                        update_product(db, pid, name=name, price=price, unit=unit, stock=stock)
+                    save_export_from_db()
+                    st.success("Product updated.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to update product: {e}")
+        else:
+            st.info("No products to edit.")
+    with edit_tab2:
+        if data.get("clients"):
+            cli_map = {f"{c['id']}: {c['name']}": c['id'] for c in data["clients"]}
+            sel = st.selectbox("Select client", list(cli_map.keys()))
+            cid = cli_map[sel]
+            name = st.text_input("Name", value=next(c['name'] for c in data['clients'] if c['id']==cid))
+            phone = st.text_input("Phone", value=next((c.get('phone') or '') for c in data['clients'] if c['id']==cid))
+            if st.button("Save Client Changes"):
+                try:
+                    with get_session() as db:
+                        update_client(db, cid, name=name, phone=phone)
+                    save_export_from_db()
+                    st.success("Client updated.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to update client: {e}")
+        else:
+            st.info("No clients to edit.")
+    with edit_tab3:
+        if data.get("suppliers"):
+            sup_map = {f"{s['id']}: {s['name']}": s['id'] for s in data["suppliers"]}
+            sel = st.selectbox("Select supplier", list(sup_map.keys()))
+            sid = sup_map[sel]
+            name = st.text_input("Name", value=next(s['name'] for s in data['suppliers'] if s['id']==sid))
+            phone = st.text_input("Phone", value=next((s.get('phone') or '') for s in data['suppliers'] if s['id']==sid))
+            if st.button("Save Supplier Changes"):
+                try:
+                    with get_session() as db:
+                        update_supplier(db, sid, name=name, phone=phone)
+                    save_export_from_db()
+                    st.success("Supplier updated.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to update supplier: {e}")
+        else:
+            st.info("No suppliers to edit.")
+
+    st.subheader("Export & Delete Records")
+    col_a, col_b = st.columns(2)
+    with col_a:
+        if st.button("Download all CSVs (regenerate)"):
+            save_export_from_db()
+            st.success("CSV export regenerated in exports/.")
+    with col_b:
+        st.write("Delete individual records safely (requires confirmation):")
+        with st.expander("🧾 Delete Sale"):
+            data = load()
+            if data.get("sales"):
+                sale_map = {f"{s['id']}: Ksh {s['total_amount']} on {s['date']}": s['id'] for s in data['sales']}
+                sel = st.selectbox("Select sale", list(sale_map.keys()), key="del_sale_sel")
+                confirm = st.checkbox("Confirm delete sale", key="del_sale_confirm")
+                if st.button("Delete Sale", key="del_sale_btn", disabled=not confirm):
+                    try:
+                        with get_session() as db:
+                            delete_sale(db, sale_map[sel])
+                        save_export_from_db()
+                        st.success("Sale deleted and stock restored.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to delete sale: {e}")
+            else:
+                st.info("No sales to delete.")
+        with st.expander("🏭 Delete Supplier"):
+            data = load()
+            if data.get("suppliers"):
+                sup_map = {f"{s['id']}: {s['name']}": s['id'] for s in data['suppliers']}
+                sel = st.selectbox("Select supplier", list(sup_map.keys()), key="del_sup_sel")
+                confirm = st.checkbox("Confirm delete supplier", key="del_sup_confirm")
+                if st.button("Delete Supplier", key="del_sup_btn", disabled=not confirm):
+                    try:
+                        with get_session() as db:
+                            delete_supplier(db, sup_map[sel])
+                        save_export_from_db()
+                        st.success("Supplier deleted.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to delete supplier: {e}")
+            else:
+                st.info("No suppliers to delete.")
+        with st.expander("🧺 Delete Product"):
+            data = load()
+            if data.get("products"):
+                prod_map = {f"{p['id']}: {p['name']}": p['id'] for p in data['products']}
+                sel = st.selectbox("Select product", list(prod_map.keys()), key="del_prod_sel")
+                confirm = st.checkbox("Confirm delete product", key="del_prod_confirm")
+                if st.button("Delete Product", key="del_prod_btn", disabled=not confirm):
+                    try:
+                        with get_session() as db:
+                            delete_product(db, prod_map[sel])
+                        save_export_from_db()
+                        st.success("Product deleted.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to delete product: {e}")
+            else:
+                st.info("No products to delete.")
+
+        with st.expander("👥 Delete Client"):
+            data = load()
+            if data.get("clients"):
+                cli_map = {f"{c['id']}: {c['name']}": c['id'] for c in data['clients']}
+                sel = st.selectbox("Select client", list(cli_map.keys()), key="del_cli_sel")
+                confirm = st.checkbox("Confirm delete client", key="del_cli_confirm")
+                if st.button("Delete Client", key="del_cli_btn", disabled=not confirm):
+                    try:
+                        with get_session() as db:
+                            delete_client(db, cli_map[sel])
+                        save_export_from_db()
+                        st.success("Client deleted.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to delete client: {e}")
+            else:
+                st.info("No clients to delete.")
+
+        with st.expander("🚚 Delete Delivery"):
+            data = load()
+            if data.get("deliveries"):
+                deliv_map = {}
+                options = []
+                for d in data["deliveries"]:
+                    label = f"{d['id']}: {get_product_name(d['product_id'], data)} x{d['quantity']} on {d['date']}"
+                    deliv_map[label] = d['id']
+                    options.append(label)
+                sel = st.selectbox("Select delivery", options, key="del_delivery_sel")
+                confirm = st.checkbox("Confirm delete delivery", key="del_delivery_confirm")
+                if st.button("Delete Delivery", key="del_delivery_btn", disabled=not confirm):
+                    try:
+                        with get_session() as db:
+                            delete_delivery(db, deliv_map[sel])
+                        save_export_from_db()
+                        st.success("Delivery deleted and stock reduced accordingly.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to delete delivery: {e}")
+            else:
+                st.info("No deliveries to delete.")
+
+        with st.expander("🧾 Delete Sale Item"):
+            data = load()
+            # Build options from sale items with their IDs
+            sale_item_options = []
+            sale_item_map = {}
+            for s in data.get("sales", []):
+                for it in s.get("items", []):
+                    label = f"Item {it['id']} (Sale {s['id']}): {get_product_name(it['product_id'], data)} x{it['quantity']} at {it['price_per_unit']} on {s['date']}"
+                    sale_item_options.append(label)
+                    sale_item_map[label] = it['id']
+            if sale_item_options:
+                sel = st.selectbox("Select sale item", sale_item_options, key="del_sale_item_sel")
+                confirm = st.checkbox("Confirm delete sale item", key="del_sale_item_confirm")
+                if st.button("Delete Sale Item", key="del_sale_item_btn", disabled=not confirm):
+                    try:
+                        with get_session() as db:
+                            delete_sale_item(db, sale_item_map[sel])
+                        save_export_from_db()
+                        st.success("Sale item deleted; sale total and stock adjusted.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to delete sale item: {e}")
+            else:
+                st.info("No sale items to delete.")
+
 
 # Add some styling
 st.markdown("""
