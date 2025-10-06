@@ -14,6 +14,11 @@ except Exception:
 
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///milkbar.db")
 
+# Ensure Postgres uses SSL when not specified (e.g., Supabase)
+if DATABASE_URL.startswith("postgresql") and "sslmode=" not in DATABASE_URL:
+    sep = "?" if "?" not in DATABASE_URL else "&"
+    DATABASE_URL = f"{DATABASE_URL}{sep}sslmode=require"
+
 engine = create_engine(DATABASE_URL, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 Base = declarative_base()
@@ -83,8 +88,13 @@ class Delivery(Base):
     product = relationship("Product")
 
 
-# Create tables
-Base.metadata.create_all(bind=engine)
+def init_db() -> None:
+    """Create tables if they do not exist. Call this once at startup."""
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception as e:
+        # Defer raising to caller to surface a helpful message in the UI/CLI
+        raise
 
 
 def get_session() -> Session:

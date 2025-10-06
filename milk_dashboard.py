@@ -8,8 +8,13 @@ from export_utils import export_all_csv
 
 # Configure database URL from Streamlit secrets if available BEFORE importing storage
 try:
-    if "postgres" in st.secrets and st.secrets["postgres"].get("uri"):
-        os.environ.setdefault("DATABASE_URL", st.secrets["postgres"]["uri"])
+    # Only set from secrets if DATABASE_URL is not already provided (e.g., by local shell)
+    if not os.environ.get("DATABASE_URL") and "postgres" in st.secrets and st.secrets["postgres"].get("uri"):
+        uri = st.secrets["postgres"]["uri"]
+        # Ensure driver is psycopg2 for SQLAlchemy
+        if uri.startswith("postgresql://") and "+psycopg2" not in uri:
+            uri = uri.replace("postgresql://", "postgresql+psycopg2://", 1)
+        os.environ["DATABASE_URL"] = uri
 except Exception:
     pass
 
@@ -17,7 +22,7 @@ from storage import (
     get_session,
     list_products, list_clients, list_suppliers, list_deliveries, list_sales,
     create_product, create_client, create_supplier, record_delivery, record_sale,
-    snapshot,
+    snapshot, init_db,
 )
 
 # Set page config
@@ -26,6 +31,12 @@ st.set_page_config(
     page_icon="🥛",
     layout="wide"
 )
+
+# Initialize DB (creates tables if missing)
+try:
+    init_db()
+except Exception as e:
+    st.error(f"Database initialization failed: {e}")
 
 # Helper functions
 def load():
