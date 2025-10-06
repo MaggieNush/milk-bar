@@ -4,6 +4,21 @@ import os
 import pandas as pd
 from datetime import datetime
 from milk_bar import load_data, get_client_name, get_supplier_name, get_product_name
+from export_utils import export_all_csv
+
+# Configure database URL from Streamlit secrets if available BEFORE importing storage
+try:
+    if "postgres" in st.secrets and st.secrets["postgres"].get("uri"):
+        os.environ.setdefault("DATABASE_URL", st.secrets["postgres"]["uri"])
+except Exception:
+    pass
+
+from storage import (
+    get_session,
+    list_products, list_clients, list_suppliers, list_deliveries, list_sales,
+    create_product, create_client, create_supplier, record_delivery, record_sale,
+    snapshot,
+)
 
 # Set page config
 st.set_page_config(
@@ -14,11 +29,18 @@ st.set_page_config(
 
 # Helper functions
 def load():
-    return load_data()
+    # Pull a fresh snapshot from DB for display
+    with get_session() as db:
+        return snapshot(db)
 
-def save(data):
-    with open("milk_bar_data.json", 'w') as f:
-        json.dump(data, f, indent=2)
+def save_export_from_db():
+    # Export CSVs from current DB state
+    try:
+        with get_session() as db:
+            data = snapshot(db)
+        export_all_csv(data, out_dir="exports")
+    except Exception as e:
+        st.warning(f"CSV export failed: {e}")
 
 # Load data
 data = load()
@@ -142,24 +164,25 @@ elif page == "Sales":
             total_amount = sum(item["total"] for item in st.session_state.cart)
             st.write(f"Total Amount: {format_currency(total_amount)}")
             if st.button("Save Sale"):
-                # Persist sale
-                items = [{k: v for k, v in item.items() if k in ["product_id", "quantity", "price_per_unit", "total"]} for item in st.session_state.cart]
-                client_id = st.session_state.cart[0]["client_id"]
-                sale = {
-                    "id": len(data["sales"]) + 1,
-                    "client_id": client_id,
-                    "items": items,
-                    "total_amount": total_amount,
-                    "date": datetime.now().strftime("%Y-%m-%d %H:%M")
-                }
-                # Update stock
-                for item in st.session_state.cart:
-                    prod = next(p for p in data["products"] if p["id"] == item["product_id"])
-                    prod["stock"] -= item["quantity"]
-                data["sales"].append(sale)
-                save(data)
-                st.success("Sale saved successfully!")
-                st.session_state.cart = []
+                # Persist sale to DB
+                client_id = int(st.session_state.cart[0]["client_id"])
+                items = [
+                    {
+                        "product_id": int(item["product_id"]),
+                        "quantity": float(item["quantity"]),
+                        "price_per_unit": float(item["price_per_unit"]),
+                    }
+                    for item in st.session_state.cart
+                ]
+                try:
+                    with get_session() as db:
+                        record_sale(db, client_id=client_id, items=items)
+                    save_export_from_db()
+                    st.success("Sale saved successfully!")
+                    st.session_state.cart = []
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to save sale: {e}")
         else:
             st.info("Cart is empty. Add items above.")
 
@@ -203,15 +226,14 @@ elif page == "Clients":
             name = st.text_input("Name")
             phone = st.text_input("Phone")
             if st.form_submit_button("Add Client"):
-                new_client = {
-                    "id": len(data["clients"]) + 1,
-                    "name": name,
-                    "phone": phone,
-                    "date_added": datetime.now().strftime("%Y-%m-%d %H:%M")
-                }
-                data["clients"].append(new_client)
-                save(data)
-                st.success(f"Client '{name}' added successfully!")
+                try:
+                    with get_session() as db:
+                        create_client(db, name=name, phone=phone)
+                    save_export_from_db()
+                    st.success(f"Client '{name}' added successfully!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to add client: {e}")
     # Clients list
     st.subheader("All Clients")
     data = load()
@@ -241,15 +263,14 @@ elif page == "Suppliers":
             name = st.text_input("Name")
             phone = st.text_input("Phone")
             if st.form_submit_button("Add Supplier"):
-                new_supplier = {
-                    "id": len(data["suppliers"]) + 1,
-                    "name": name,
-                    "phone": phone,
-                    "date_added": datetime.now().strftime("%Y-%m-%d %H:%M")
-                }
-                data["suppliers"].append(new_supplier)
-                save(data)
-                st.success(f"Supplier '{name}' added successfully!")
+                try:
+                    with get_session() as db:
+                        create_supplier(db, name=name, phone=phone)
+                    save_export_from_db()
+                    st.success(f"Supplier '{name}' added successfully!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to add supplier: {e}")
     # Record delivery
     with st.expander("Record Delivery"):
         if not data.get("suppliers") or not data.get("products"):
@@ -263,24 +284,16 @@ elif page == "Suppliers":
                 qty = st.number_input("Quantity", min_value=0.0, step=0.5, value=1.0)
                 price = st.number_input("Price per unit (Ksh)", min_value=0.0, step=1.0)
                 if st.form_submit_button("Save Delivery"):
-                    pid = prod_map[product_label]
-                    sid = sup_map[supplier_label]
-                    total_cost = qty * price
-                    delivery = {
-                        "id": len(data["deliveries"]) + 1,
-                        "supplier_id": sid,
-                        "product_id": pid,
-                        "quantity": qty,
-                        "price_per_unit": price,
-                        "total_cost": total_cost,
-                        "date": datetime.now().strftime("%Y-%m-%d %H:%M")
-                    }
-                    # Update stock
-                    prod = next(p for p in data["products"] if p["id"] == pid)
-                    prod["stock"] += qty
-                    data["deliveries"].append(delivery)
-                    save(data)
-                    st.success("Delivery recorded and stock updated.")
+                    pid = int(prod_map[product_label])
+                    sid = int(sup_map[supplier_label])
+                    try:
+                        with get_session() as db:
+                            record_delivery(db, supplier_id=sid, product_id=pid, quantity=float(qty), price_per_unit=float(price))
+                        save_export_from_db()
+                        st.success("Delivery recorded and stock updated.")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Failed to record delivery: {e}")
     # Suppliers list
     st.subheader("All Suppliers")
     data = load()
@@ -308,15 +321,16 @@ elif page == "Products":
     if not data.get("products"):
         st.info("No products found in inventory.")
         if st.button("Seed sample products"):
-            now = datetime.now().strftime("%Y-%m-%d %H:%M")
-            data["products"] = [
-                {"id": 1, "name": "Fresh Milk", "price": 60.0, "unit": "liter", "stock": 50.0, "date_added": now},
-                {"id": 2, "name": "Mala", "price": 50.0, "unit": "packet", "stock": 30.0, "date_added": now},
-                {"id": 3, "name": "Yogurt", "price": 80.0, "unit": "bottle", "stock": 20.0, "date_added": now},
-            ]
-            save(data)
-            st.success("Sample products added.")
-            st.rerun()
+            try:
+                with get_session() as db:
+                    create_product(db, name="Fresh Milk", price=60.0, unit="liter", stock=50.0)
+                    create_product(db, name="Mala", price=50.0, unit="packet", stock=30.0)
+                    create_product(db, name="Yogurt", price=80.0, unit="bottle", stock=20.0)
+                save_export_from_db()
+                st.success("Sample products added.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"Failed to seed products: {e}")
     with st.expander("➕ Add New Product"):
         with st.form("add_product"):
             name = st.text_input("Product Name")
@@ -324,19 +338,14 @@ elif page == "Products":
             unit = st.text_input("Unit (e.g., liter, packet, bottle)")
             stock = st.number_input("Initial stock", min_value=0.0, step=0.5)
             if st.form_submit_button("Add Product"):
-                next_id = max([p.get("id", 0) for p in data.get("products", [])], default=0) + 1
-                new_product = {
-                    "id": next_id,
-                    "name": name,
-                    "price": price,
-                    "unit": unit,
-                    "stock": stock,
-                    "date_added": datetime.now().strftime("%Y-%m-%d %H:%M")
-                }
-                data.setdefault("products", []).append(new_product)
-                save(data)
-                st.success(f"Product '{name}' added successfully!")
-                st.rerun()
+                try:
+                    with get_session() as db:
+                        create_product(db, name=name, price=float(price), unit=unit, stock=float(stock))
+                    save_export_from_db()
+                    st.success(f"Product '{name}' added successfully!")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to add product: {e}")
     st.subheader("Inventory")
     data = load()
     if data.get("products"):

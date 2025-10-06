@@ -3,6 +3,7 @@ import os
 from datetime import datetime
 from typing import Dict, List, Optional, TypedDict
 from dataclasses import dataclass, asdict
+from export_utils import export_all_csv
 
 # Define data models
 @dataclass
@@ -73,6 +74,12 @@ def load_data():
 def save_data(data):
     with open(DATA_FILE, 'w') as f:
         json.dump(data, f, indent=2, default=lambda o: o.__dict__ if hasattr(o, '__dict__') else o)
+    # Also export CSV snapshots to ./exports
+    try:
+        export_all_csv(data, out_dir="exports")
+    except Exception as e:
+        # Non-fatal: keep app running even if export fails
+        print(f"[warn] CSV export failed: {e}")
 
 def add_product():
     data = load_data()

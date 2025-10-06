@@ -17,6 +17,9 @@ Thumbs.db
 
 # Streamlit
 .streamlit/
+!.streamlit/secrets.toml
 
 # Local data files
 milk_bar_data.json
+milkbar.db
+exports/
